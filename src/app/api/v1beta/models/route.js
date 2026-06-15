@@ -1,4 +1,5 @@
 import { PROVIDER_MODELS } from "@/shared/constants/models";
+import { publicApiAuthError } from "@/app/api/publicApiAuth";
 
 /**
  * Handle CORS preflight
@@ -17,8 +18,11 @@ export async function OPTIONS() {
  * GET /v1beta/models - Gemini compatible models list
  * Returns models in Gemini API format
  */
-export async function GET() {
+export async function GET(request) {
   try {
+    const authError = await publicApiAuthError(request);
+    if (authError) return authError;
+
     // Collect all models from all providers
     const models = [];
     

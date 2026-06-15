@@ -1,5 +1,5 @@
 import {
-  extractApiKey, getApiKeyValidation,
+  validateRequestApiKey,
   getProviderCredentials, markAccountUnavailable,
 } from "../services/auth.js";
 import { getSettings } from "@/lib/localDb";
@@ -33,12 +33,8 @@ export async function handleTts(request) {
   log.request("POST", `${url.pathname} | ${modelStr} | format=${responseFormat}${language ? ` | lang=${language}` : ""}`);
 
   const settings = await getSettings();
-  if (settings.requireApiKey) {
-    const apiKey = extractApiKey(request);
-    if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    const validation = await getApiKeyValidation(apiKey);
-    if (!validation.valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, validation.message || "Invalid API key");
-  }
+  const validation = await validateRequestApiKey(request, { requireApiKey: !!settings.requireApiKey });
+  if (!validation.valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, validation.message || "Invalid API key");
 
   if (!modelStr) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
   if (!body.input) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: input");

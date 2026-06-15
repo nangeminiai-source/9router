@@ -3,7 +3,7 @@ import {
   markAccountUnavailable,
   clearAccountError,
   extractApiKey,
-  getApiKeyValidation,
+  validateRequestApiKey,
 } from "../services/auth.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
@@ -43,16 +43,10 @@ export async function handleEmbeddings(request) {
 
   // Enforce API key if enabled in settings
   const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) {
-      log.warn("AUTH", "Missing API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    }
-    const validation = await getApiKeyValidation(apiKey);
-    if (!validation.valid) {
-      log.warn("AUTH", `${validation.message} (requireApiKey=true)`);
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, validation.message || "Invalid API key");
-    }
+  const validation = await validateRequestApiKey(request, { requireApiKey: !!settings.requireApiKey });
+  if (!validation.valid) {
+    log.warn("AUTH", `${validation.message} (requireApiKey=${!!settings.requireApiKey})`);
+    return errorResponse(HTTP_STATUS.UNAUTHORIZED, validation.message || "Invalid API key");
   }
 
   if (!modelStr) {

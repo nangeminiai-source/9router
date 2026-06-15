@@ -317,3 +317,15 @@ export async function getApiKeyValidation(apiKey) {
   }
   return await validateApiKeyDetailed(apiKey);
 }
+
+export async function validateRequestApiKey(request, { requireApiKey = false } = {}) {
+  const apiKey = extractApiKey(request);
+  if (!apiKey) {
+    return requireApiKey
+      ? { valid: false, reason: "missing", message: "Missing API key", apiKey: null }
+      : { valid: true, reason: "not_required", message: null, apiKey: null };
+  }
+
+  const validation = await validateApiKeyDetailed(apiKey);
+  return { ...validation, apiKey };
+}

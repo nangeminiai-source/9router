@@ -74,4 +74,21 @@ describe("API key expiration", () => {
     expect(keys[0].status).toBe("expired");
     expect(keys[0].expiredAt).toBeTruthy();
   });
+
+  it("rejects expired provided keys even when API keys are not required", async () => {
+    const { createApiKey } = await import("@/lib/db/index.js");
+    const { validateRequestApiKey } = await import("@/sse/services/auth.js");
+    const key = await createApiKey("expired-local", "machine-test", {
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    const request = new Request("http://localhost:20128/v1/chat/completions", {
+      headers: { Authorization: `Bearer ${key.key}` },
+    });
+    const validation = await validateRequestApiKey(request, { requireApiKey: false });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.reason).toBe("expired");
+    expect(validation.message).toBe("API key has expired");
+  });
 });
