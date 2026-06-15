@@ -29,7 +29,12 @@ export async function PUT(request, { params }) {
     }
 
     const updateData = {};
-    if (isActive !== undefined) updateData.isActive = isActive;
+    if (isActive !== undefined) {
+      if (existing.status === "expired" && isActive) {
+        return NextResponse.json({ error: "Expired API keys cannot be reactivated" }, { status: 400 });
+      }
+      updateData.isActive = isActive;
+    }
 
     const updated = await updateApiKey(id, updateData);
 

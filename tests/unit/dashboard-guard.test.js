@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
     body,
   })),
   getSettings: vi.fn(),
-  validateApiKey: vi.fn(),
+  validateApiKeyDetailed: vi.fn(),
   getConsistentMachineId: vi.fn(),
   verifyDashboardAuthToken: vi.fn(),
 }));
@@ -22,7 +22,7 @@ vi.mock("next/server", () => ({
 
 vi.mock("@/lib/localDb", () => ({
   getSettings: mocks.getSettings,
-  validateApiKey: mocks.validateApiKey,
+  validateApiKeyDetailed: mocks.validateApiKeyDetailed,
 }));
 
 vi.mock("@/shared/utils/machineId", () => ({
@@ -49,7 +49,7 @@ describe("dashboard guard public LLM API access", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getSettings.mockResolvedValue({ requireLogin: true });
-    mocks.validateApiKey.mockResolvedValue(false);
+    mocks.validateApiKeyDetailed.mockResolvedValue({ valid: false, message: "Invalid API key" });
     mocks.getConsistentMachineId.mockResolvedValue("cli-token");
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
   });
@@ -58,7 +58,7 @@ describe("dashboard guard public LLM API access", () => {
     const response = await proxy(request("/v1/chat/completions", { host: "localhost:20128" }));
 
     expect(response).toBe(mocks.nextResponse);
-    expect(mocks.validateApiKey).not.toHaveBeenCalled();
+    expect(mocks.validateApiKeyDetailed).not.toHaveBeenCalled();
   });
 
   it("rejects remote rewritten public LLM API without API key", async () => {
@@ -72,7 +72,7 @@ describe("dashboard guard public LLM API access", () => {
     const response = await proxy(request("/api/v1/chat/completions", { host: "localhost:20128" }));
 
     expect(response).toBe(mocks.nextResponse);
-    expect(mocks.validateApiKey).not.toHaveBeenCalled();
+    expect(mocks.validateApiKeyDetailed).not.toHaveBeenCalled();
   });
 
   it("rejects remote beta public LLM API without API key", async () => {
@@ -90,7 +90,7 @@ describe("dashboard guard public LLM API access", () => {
   });
 
   it("allows remote public LLM API with valid bearer API key", async () => {
-    mocks.validateApiKey.mockResolvedValue(true);
+    mocks.validateApiKeyDetailed.mockResolvedValue({ valid: true });
 
     const response = await proxy(request("/api/v1/chat/completions", {
       host: "router.example.com",
@@ -98,11 +98,11 @@ describe("dashboard guard public LLM API access", () => {
     }));
 
     expect(response).toBe(mocks.nextResponse);
-    expect(mocks.validateApiKey).toHaveBeenCalledWith("sk-valid");
+    expect(mocks.validateApiKeyDetailed).toHaveBeenCalledWith("sk-valid");
   });
 
   it("allows remote public LLM API with valid x-api-key", async () => {
-    mocks.validateApiKey.mockResolvedValue(true);
+    mocks.validateApiKeyDetailed.mockResolvedValue({ valid: true });
 
     const response = await proxy(request("/v1/web/fetch", {
       host: "router.example.com",
@@ -110,11 +110,11 @@ describe("dashboard guard public LLM API access", () => {
     }));
 
     expect(response).toBe(mocks.nextResponse);
-    expect(mocks.validateApiKey).toHaveBeenCalledWith("sk-valid");
+    expect(mocks.validateApiKeyDetailed).toHaveBeenCalledWith("sk-valid");
   });
 
   it("allows remote rewritten beta public LLM API with valid API key", async () => {
-    mocks.validateApiKey.mockResolvedValue(true);
+    mocks.validateApiKeyDetailed.mockResolvedValue({ valid: true });
 
     const response = await proxy(request("/api/v1beta/models", {
       host: "router.example.com",
@@ -122,7 +122,19 @@ describe("dashboard guard public LLM API access", () => {
     }));
 
     expect(response).toBe(mocks.nextResponse);
-    expect(mocks.validateApiKey).toHaveBeenCalledWith("sk-valid");
+    expect(mocks.validateApiKeyDetailed).toHaveBeenCalledWith("sk-valid");
+  });
+
+  it("rejects remote public LLM API with expired API key message", async () => {
+    mocks.validateApiKeyDetailed.mockResolvedValue({ valid: false, reason: "expired", message: "API key has expired" });
+
+    const response = await proxy(request("/api/v1/chat/completions", {
+      host: "router.example.com",
+      authorization: "Bearer sk-expired",
+    }));
+
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe("API key has expired");
   });
 });
 
@@ -130,7 +142,7 @@ describe("dashboard guard local-only access", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getSettings.mockResolvedValue({ requireLogin: true });
-    mocks.validateApiKey.mockResolvedValue(false);
+    mocks.validateApiKeyDetailed.mockResolvedValue({ valid: false, message: "Invalid API key" });
     mocks.getConsistentMachineId.mockResolvedValue("cli-token");
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
   });

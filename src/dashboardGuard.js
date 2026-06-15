@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSettings, validateApiKey } from "@/lib/localDb";
+import { getSettings, validateApiKeyDetailed } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
 
@@ -110,16 +110,22 @@ function extractApiKey(request) {
   return request.headers.get("x-api-key");
 }
 
-async function hasValidApiKey(request) {
+async function getApiKeyAccess(request) {
   const apiKey = extractApiKey(request);
-  if (!apiKey) return false;
-  return await validateApiKey(apiKey);
+  if (!apiKey) {
+    return { valid: false, message: "API key required for remote API access" };
+  }
+  const validation = await validateApiKeyDetailed(apiKey);
+  return {
+    valid: validation.valid,
+    message: validation.message || "Invalid API key",
+  };
 }
 
 async function canAccessPublicLlmApi(request) {
   if (isLocalRequest(request)) return true;
   if (await hasValidCliToken(request)) return true;
-  return await hasValidApiKey(request);
+  return (await getApiKeyAccess(request)).valid;
 }
 
 async function canAccessLocalOnlyRoute(request) {
@@ -182,7 +188,8 @@ export async function proxy(request) {
 
   if (isPublicLlmApi(pathname)) {
     if (await canAccessPublicLlmApi(request)) return NextResponse.next();
-    return NextResponse.json({ error: "API key required for remote API access" }, { status: 401 });
+    const access = await getApiKeyAccess(request);
+    return NextResponse.json({ error: access.message }, { status: 401 });
   }
 
   // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.

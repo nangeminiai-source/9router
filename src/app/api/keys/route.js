@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getApiKeys, createApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
+import { resolveApiKeyExpiresAt } from "@/shared/utils/apiKeyExpiration";
 
 export const dynamic = "force-dynamic";
 
@@ -19,21 +20,31 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { name } = body;
+    const { name, expirationPreset = "never", customExpiresAt = null } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
+    let expiresAt = null;
+    try {
+      expiresAt = resolveApiKeyExpiresAt({ expirationPreset, customExpiresAt });
+    } catch (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
     // Always get machineId from server
     const machineId = await getConsistentMachineId();
-    const apiKey = await createApiKey(name, machineId);
+    const apiKey = await createApiKey(name, machineId, { expiresAt });
 
     return NextResponse.json({
       key: apiKey.key,
       name: apiKey.name,
       id: apiKey.id,
       machineId: apiKey.machineId,
+      expiresAt: apiKey.expiresAt,
+      expiredAt: apiKey.expiredAt,
+      status: apiKey.status,
     }, { status: 201 });
   } catch (error) {
     console.log("Error creating key:", error);
