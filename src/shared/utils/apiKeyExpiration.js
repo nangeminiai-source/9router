@@ -71,6 +71,8 @@ export function resolveApiKeyRenewedExpiresAt({
   customDurationUnit = "days",
   customExpiresAt = null,
 } = {}, currentExpiresAt = null, now = new Date()) {
+  if (!renewalPreset || renewalPreset === "never") return null;
+
   const currentExpiresMs = currentExpiresAt ? new Date(currentExpiresAt).getTime() : NaN;
   const baseMs = Number.isFinite(currentExpiresMs) && currentExpiresMs > now.getTime()
     ? currentExpiresMs

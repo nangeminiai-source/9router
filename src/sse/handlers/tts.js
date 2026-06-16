@@ -33,7 +33,7 @@ export async function handleTts(request) {
   log.request("POST", `${url.pathname} | ${modelStr} | format=${responseFormat}${language ? ` | lang=${language}` : ""}`);
 
   const settings = await getSettings();
-  const validation = await validateRequestApiKey(request, { requireApiKey: !!settings.requireApiKey });
+  const validation = await validateRequestApiKey(request, { requireApiKey: !!settings.requireApiKey, consumeQuota: true });
   if (!validation.valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, validation.message || "Invalid API key");
 
   if (!modelStr) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");

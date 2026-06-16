@@ -1,4 +1,4 @@
-import { getProviderConnections, validateApiKey, validateApiKeyDetailed, updateProviderConnection, getSettings } from "@/lib/localDb";
+import { getProviderConnections, validateApiKey, validateApiKeyDetailed, consumeApiKeyRequest, updateProviderConnection, getSettings } from "@/lib/localDb";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
@@ -318,7 +318,7 @@ export async function getApiKeyValidation(apiKey) {
   return await validateApiKeyDetailed(apiKey);
 }
 
-export async function validateRequestApiKey(request, { requireApiKey = false } = {}) {
+export async function validateRequestApiKey(request, { requireApiKey = false, consumeQuota = false } = {}) {
   const apiKey = extractApiKey(request);
   if (!apiKey) {
     return requireApiKey
@@ -326,6 +326,8 @@ export async function validateRequestApiKey(request, { requireApiKey = false } =
       : { valid: true, reason: "not_required", message: null, apiKey: null };
   }
 
-  const validation = await validateApiKeyDetailed(apiKey);
+  const validation = consumeQuota
+    ? await consumeApiKeyRequest(apiKey)
+    : await validateApiKeyDetailed(apiKey);
   return { ...validation, apiKey };
 }

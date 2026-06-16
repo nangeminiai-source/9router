@@ -43,7 +43,7 @@ export async function handleEmbeddings(request) {
 
   // Enforce API key if enabled in settings
   const settings = await getSettings();
-  const validation = await validateRequestApiKey(request, { requireApiKey: !!settings.requireApiKey });
+  const validation = await validateRequestApiKey(request, { requireApiKey: !!settings.requireApiKey, consumeQuota: true });
   if (!validation.valid) {
     log.warn("AUTH", `${validation.message} (requireApiKey=${!!settings.requireApiKey})`);
     return errorResponse(HTTP_STATUS.UNAUTHORIZED, validation.message || "Invalid API key");

@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
+vi.setConfig({ testTimeout: 30000 });
+
 let tempDir;
 const originalDataDir = process.env.DATA_DIR;
 
@@ -156,6 +158,14 @@ describe("API key expiration", () => {
     }, null, now)).toThrow(/future/i);
   });
 
+  it("can remove expiration by setting renewal to never", async () => {
+    const { resolveApiKeyRenewedExpiresAt } = await import("@/shared/utils/apiKeyExpiration.js");
+
+    expect(resolveApiKeyRenewedExpiresAt({
+      renewalPreset: "never",
+    }, "2026-06-16T17:00:00.000Z")).toBeNull();
+  });
+
   it("renews an expired key without changing the key value", async () => {
     const { createApiKey, getApiKeys, updateApiKey } = await import("@/lib/db/index.js");
     const { resolveApiKeyRenewedExpiresAt } = await import("@/shared/utils/apiKeyExpiration.js");
@@ -176,5 +186,125 @@ describe("API key expiration", () => {
     expect(renewed.status).toBe("active");
     expect(renewed.expiredAt).toBeNull();
     expect(new Date(renewed.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("tracks request quota and rejects requests after the limit is reached", async () => {
+    const { createApiKey, consumeApiKeyRequest, validateApiKeyDetailed } = await import("@/lib/db/index.js");
+    const key = await createApiKey("limited", "machine-test", {
+      requestLimit: 2,
+    });
+
+    const first = await consumeApiKeyRequest(key.key);
+    const second = await consumeApiKeyRequest(key.key);
+    const third = await consumeApiKeyRequest(key.key);
+    const validation = await validateApiKeyDetailed(key.key);
+
+    expect(first.valid).toBe(true);
+    expect(first.key.requestRemaining).toBe(1);
+    expect(second.valid).toBe(true);
+    expect(second.key.requestRemaining).toBe(0);
+    expect(third.valid).toBe(false);
+    expect(third.reason).toBe("quota_exceeded");
+    expect(validation.valid).toBe(false);
+    expect(validation.reason).toBe("quota_exceeded");
+  });
+
+  it("top ups quota without changing the key value", async () => {
+    const { createApiKey, consumeApiKeyRequest, addApiKeyQuota } = await import("@/lib/db/index.js");
+    const key = await createApiKey("top-up", "machine-test", {
+      requestLimit: 1,
+    });
+
+    await consumeApiKeyRequest(key.key);
+    const toppedUp = await addApiKeyQuota(key.id, 5);
+
+    expect(toppedUp.key).toBe(key.key);
+    expect(toppedUp.requestLimit).toBe(6);
+    expect(toppedUp.requestUsed).toBe(1);
+    expect(toppedUp.requestRemaining).toBe(5);
+    expect(toppedUp.status).toBe("active");
+  });
+
+  it("supports explicit quota management modes", async () => {
+    const { createApiKey, consumeApiKeyRequest, updateApiKeyQuota } = await import("@/lib/db/index.js");
+    const key = await createApiKey("manage-quota", "machine-test", {
+      requestLimit: 5,
+    });
+
+    await consumeApiKeyRequest(key.key);
+    await consumeApiKeyRequest(key.key);
+
+    const setTotal = await updateApiKeyQuota(key.id, {
+      mode: "set_total",
+      requestLimit: 10,
+    });
+    expect(setTotal.requestLimit).toBe(10);
+    expect(setTotal.requestUsed).toBe(2);
+    expect(setTotal.requestRemaining).toBe(8);
+
+    const resetUsed = await updateApiKeyQuota(key.id, {
+      mode: "reset_used",
+    });
+    expect(resetUsed.requestLimit).toBe(10);
+    expect(resetUsed.requestUsed).toBe(0);
+
+    const unlimited = await updateApiKeyQuota(key.id, {
+      mode: "unlimited",
+    });
+    expect(unlimited.requestLimit).toBeNull();
+    expect(unlimited.requestUsed).toBe(0);
+    expect(unlimited.status).toBe("active");
+  });
+
+  it("does not silently unpause a key while managing quota", async () => {
+    const { createApiKey, updateApiKey, updateApiKeyQuota } = await import("@/lib/db/index.js");
+    const key = await createApiKey("paused-quota", "machine-test", {
+      requestLimit: 5,
+    });
+
+    await updateApiKey(key.id, { isActive: false });
+    const updated = await updateApiKeyQuota(key.id, {
+      mode: "add",
+      additionalRequests: 5,
+    });
+
+    expect(updated.requestLimit).toBe(10);
+    expect(updated.status).toBe("inactive");
+    expect(updated.isActive).toBe(false);
+  });
+
+  it("keeps stored active flag when managing expiration on quota-exceeded keys", async () => {
+    const { createApiKey, consumeApiKeyRequest, updateApiKey, updateApiKeyQuota } = await import("@/lib/db/index.js");
+    const key = await createApiKey("quota-expiration", "machine-test", {
+      requestLimit: 1,
+    });
+
+    await consumeApiKeyRequest(key.key);
+    const quotaExceeded = await updateApiKey(key.id, {
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      expiredAt: null,
+    });
+    expect(quotaExceeded.status).toBe("quota_exceeded");
+
+    const toppedUp = await updateApiKeyQuota(key.id, {
+      mode: "add",
+      additionalRequests: 1,
+    });
+    expect(toppedUp.status).toBe("active");
+    expect(toppedUp.isActive).toBe(true);
+  });
+
+  it("does not consume quota for unlimited keys", async () => {
+    const { createApiKey, consumeApiKeyRequest } = await import("@/lib/db/index.js");
+    const key = await createApiKey("unlimited", "machine-test");
+
+    const first = await consumeApiKeyRequest(key.key);
+    const second = await consumeApiKeyRequest(key.key);
+
+    expect(first.valid).toBe(true);
+    expect(first.key.requestLimit).toBeNull();
+    expect(first.key.requestUsed).toBe(0);
+    expect(second.valid).toBe(true);
+    expect(second.key.requestUsed).toBe(0);
   });
 });

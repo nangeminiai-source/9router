@@ -33,6 +33,7 @@ const API_KEY_EXPIRATION_OPTIONS = [
   { value: "custom", label: "Specific Date & Time" },
 ];
 const API_KEY_RENEWAL_OPTIONS = [
+  { value: "never", label: "Never Expire" },
   { value: "1d", label: "1 Hari" },
   { value: "7d", label: "7 Hari" },
   { value: "30d", label: "30 Hari" },
@@ -42,6 +43,16 @@ const API_KEY_RENEWAL_OPTIONS = [
 const API_KEY_RENEWAL_UNITS = [
   { value: "days", label: "Hari" },
   { value: "hours", label: "Jam" },
+];
+const API_KEY_QUOTA_OPTIONS = [
+  { value: "unlimited", label: "Unlimited Requests" },
+  { value: "limited", label: "Limited Requests" },
+];
+const API_KEY_QUOTA_MANAGE_OPTIONS = [
+  { value: "add", label: "Add Requests" },
+  { value: "set_total", label: "Set Total Limit" },
+  { value: "unlimited", label: "Switch to Unlimited" },
+  { value: "reset_used", label: "Reset Used Count" },
 ];
 
 // Browser-side health probe: must reach origin (not just CF/TS edge).
@@ -89,6 +100,8 @@ export default function APIPageClient({ machineId }) {
   const [newKeyCustomExpiresAt, setNewKeyCustomExpiresAt] = useState("");
   const [newKeyCustomDurationValue, setNewKeyCustomDurationValue] = useState("");
   const [newKeyCustomDurationUnit, setNewKeyCustomDurationUnit] = useState("days");
+  const [newKeyQuotaMode, setNewKeyQuotaMode] = useState("unlimited");
+  const [newKeyRequestLimit, setNewKeyRequestLimit] = useState("");
   const [keyCreateError, setKeyCreateError] = useState("");
   const [renewingKey, setRenewingKey] = useState(null);
   const [renewalDuration, setRenewalDuration] = useState("7d");
@@ -96,6 +109,12 @@ export default function APIPageClient({ machineId }) {
   const [customRenewalUnit, setCustomRenewalUnit] = useState("days");
   const [renewalSpecificExpiresAt, setRenewalSpecificExpiresAt] = useState("");
   const [keyRenewError, setKeyRenewError] = useState("");
+  const [toppingUpKey, setToppingUpKey] = useState(null);
+  const [quotaUpdateMode, setQuotaUpdateMode] = useState("add");
+  const [topUpAmount, setTopUpAmount] = useState("");
+  const [quotaSetTotal, setQuotaSetTotal] = useState("");
+  const [quotaResetUsed, setQuotaResetUsed] = useState(false);
+  const [keyQuotaError, setKeyQuotaError] = useState("");
   const [createdKey, setCreatedKey] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
 
@@ -749,6 +768,8 @@ export default function APIPageClient({ machineId }) {
     setNewKeyCustomExpiresAt("");
     setNewKeyCustomDurationValue("");
     setNewKeyCustomDurationUnit("days");
+    setNewKeyQuotaMode("unlimited");
+    setNewKeyRequestLimit("");
     setKeyCreateError("");
   };
 
@@ -771,6 +792,10 @@ export default function APIPageClient({ machineId }) {
       setKeyCreateError("Custom duration is required");
       return;
     }
+    if (newKeyQuotaMode === "limited" && !newKeyRequestLimit) {
+      setKeyCreateError("Request limit is required");
+      return;
+    }
     setKeyCreateError("");
 
     try {
@@ -783,6 +808,7 @@ export default function APIPageClient({ machineId }) {
           customExpiresAt: newKeyExpiration === "custom" ? newKeyCustomExpiresAt : null,
           customDurationValue: newKeyExpiration === "custom_duration" ? newKeyCustomDurationValue : null,
           customDurationUnit: newKeyExpiration === "custom_duration" ? newKeyCustomDurationUnit : "days",
+          requestLimit: newKeyQuotaMode === "limited" ? newKeyRequestLimit : null,
         }),
       });
       const data = await res.json();
@@ -799,6 +825,68 @@ export default function APIPageClient({ machineId }) {
       console.log("Error creating key:", error);
       setKeyCreateError(error.message || "Failed to create API key");
     }
+  };
+
+  const resetTopUpForm = () => {
+    setToppingUpKey(null);
+    setQuotaUpdateMode("add");
+    setTopUpAmount("");
+    setQuotaSetTotal("");
+    setQuotaResetUsed(false);
+    setKeyQuotaError("");
+  };
+
+  const performQuotaUpdate = async () => {
+    try {
+      const res = await fetch(`/api/keys/${toppingUpKey.id}/quota`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: quotaUpdateMode,
+          additionalRequests: quotaUpdateMode === "add" ? topUpAmount : null,
+          requestLimit: quotaUpdateMode === "set_total" ? quotaSetTotal : null,
+          resetUsed: quotaResetUsed,
+        }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        setKeys(prev => prev.map(k => k.id === data.key.id ? data.key : k));
+        resetTopUpForm();
+      } else {
+        setKeyQuotaError(data.error || "Failed to add quota");
+      }
+    } catch (error) {
+      console.log("Error adding key quota:", error);
+      setKeyQuotaError(error.message || "Failed to add quota");
+    }
+  };
+
+  const handleTopUpKey = async () => {
+    if (!toppingUpKey) return;
+    if (quotaUpdateMode === "add" && !topUpAmount) {
+      setKeyQuotaError("Top up amount is required");
+      return;
+    }
+    if (quotaUpdateMode === "set_total" && !quotaSetTotal) {
+      setKeyQuotaError("Total request limit is required");
+      return;
+    }
+
+    setKeyQuotaError("");
+    if (quotaUpdateMode === "unlimited") {
+      setConfirmState({
+        title: "Switch to Unlimited Requests",
+        message: "Remove the request limit for this API key? The key value and expiration stay the same.",
+        onConfirm: async () => {
+          setConfirmState(null);
+          await performQuotaUpdate();
+        },
+      });
+      return;
+    }
+
+    await performQuotaUpdate();
   };
 
   const handleRenewKey = async () => {
@@ -882,6 +970,7 @@ export default function APIPageClient({ machineId }) {
   };
 
   const isExpiredKey = (key) => key.status === "expired" || (!!key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now());
+  const isQuotaExceededKey = (key) => key.status === "quota_exceeded";
 
   const formatDateTime = (value) => {
     if (!value) return "Never";
@@ -893,8 +982,16 @@ export default function APIPageClient({ machineId }) {
     return `Expires ${formatDateTime(key.expiresAt)}`;
   };
 
+  const formatQuota = (key) => {
+    if (key.requestLimit === null || key.requestLimit === undefined) return "Unlimited requests";
+    const used = key.requestUsed || 0;
+    const remaining = Math.max((key.requestLimit || 0) - used, 0);
+    return `${remaining}/${key.requestLimit} requests remaining`;
+  };
+
   const getKeyStatus = (key) => {
     if (isExpiredKey(key)) return { label: "Expired", variant: "error" };
+    if (isQuotaExceededKey(key)) return { label: "Quota Exceeded", variant: "error" };
     if (key.isActive === false) return { label: "Inactive", variant: "warning" };
     return { label: "Active", variant: "success" };
   };
@@ -1300,11 +1397,12 @@ export default function APIPageClient({ machineId }) {
           <div className="flex flex-col">
             {keys.map((key) => {
               const keyExpired = isExpiredKey(key);
+              const keyQuotaExceeded = isQuotaExceededKey(key);
               const status = getKeyStatus(key);
               return (
               <div
                 key={key.id}
-                className={`group flex items-center justify-between gap-4 py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false || keyExpired ? "opacity-60" : ""}`}
+                className={`group flex items-center justify-between gap-4 py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false || keyExpired || keyQuotaExceeded ? "opacity-60" : ""}`}
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -1338,25 +1436,42 @@ export default function APIPageClient({ machineId }) {
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-text-muted">
                     <span>Created {formatDateTime(key.createdAt)}</span>
                     <span>{formatExpiration(key)}</span>
+                    <span>{formatQuota(key)}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {key.expiresAt && (
-                    <button
-                      onClick={() => {
-                        setRenewingKey(key);
-                        setKeyRenewError("");
-                      }}
-                      className="p-2 hover:bg-primary/10 rounded text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
-                      title="Renew key"
-                    >
-                      <span className="material-symbols-outlined text-[18px]">event_repeat</span>
-                    </button>
-                  )}
+                  <button
+                    onClick={() => {
+                      setToppingUpKey(key);
+                      setQuotaUpdateMode(key.requestLimit === null || key.requestLimit === undefined ? "set_total" : "add");
+                      setTopUpAmount("");
+                      setQuotaSetTotal(key.requestLimit === null || key.requestLimit === undefined ? "" : String(key.requestLimit));
+                      setQuotaResetUsed(false);
+                      setKeyQuotaError("");
+                    }}
+                    className="p-2 hover:bg-primary/10 rounded text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                    title="Manage request quota"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">add_card</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setRenewingKey(key);
+                      setRenewalDuration(key.expiresAt ? "7d" : "never");
+                      setCustomRenewalValue("");
+                      setCustomRenewalUnit("days");
+                      setRenewalSpecificExpiresAt("");
+                      setKeyRenewError("");
+                    }}
+                    className="p-2 hover:bg-primary/10 rounded text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                    title="Manage expiration"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">event_repeat</span>
+                  </button>
                   <Toggle
                     size="sm"
-                    checked={!keyExpired && (key.isActive ?? true)}
-                    disabled={keyExpired}
+                    checked={!keyExpired && !keyQuotaExceeded && (key.isActive ?? true)}
+                    disabled={keyExpired || keyQuotaExceeded}
                     onChange={(checked) => {
                       if (key.isActive && !checked) {
                         setConfirmState({
@@ -1371,7 +1486,7 @@ export default function APIPageClient({ machineId }) {
                         handleToggleKey(key.id, checked);
                       }
                     }}
-                    title={keyExpired ? "Expired keys cannot be resumed" : key.isActive ? "Pause key" : "Resume key"}
+                    title={keyExpired ? "Expired keys cannot be resumed" : keyQuotaExceeded ? "Top up quota to resume" : key.isActive ? "Pause key" : "Resume key"}
                   />
                   <button
                     onClick={() => handleDeleteKey(key.id)}
@@ -1448,6 +1563,30 @@ export default function APIPageClient({ machineId }) {
               required
             />
           )}
+          <Select
+            label="Request Quota"
+            value={newKeyQuotaMode}
+            onChange={(e) => {
+              setNewKeyQuotaMode(e.target.value);
+              setKeyCreateError("");
+            }}
+            options={API_KEY_QUOTA_OPTIONS}
+          />
+          {newKeyQuotaMode === "limited" && (
+            <Input
+              label="Request Limit"
+              type="number"
+              min="1"
+              step="1"
+              value={newKeyRequestLimit}
+              onChange={(e) => {
+                setNewKeyRequestLimit(e.target.value);
+                setKeyCreateError("");
+              }}
+              placeholder="50"
+              required
+            />
+          )}
           {keyCreateError && (
             <p className="text-sm text-red-500 flex items-center gap-1">
               <span className="material-symbols-outlined text-[16px]">error</span>
@@ -1462,6 +1601,7 @@ export default function APIPageClient({ machineId }) {
                 !newKeyName.trim()
                 || (newKeyExpiration === "custom" && !newKeyCustomExpiresAt)
                 || (newKeyExpiration === "custom_duration" && !newKeyCustomDurationValue)
+                || (newKeyQuotaMode === "limited" && !newKeyRequestLimit)
               }
             >
               Create
@@ -1480,10 +1620,113 @@ export default function APIPageClient({ machineId }) {
         </div>
       </Modal>
 
-      {/* Renew Key Modal */}
+      {/* Manage Quota Modal */}
+      <Modal
+        isOpen={!!toppingUpKey}
+        title="Manage Request Quota"
+        onClose={resetTopUpForm}
+      >
+        <div className="flex flex-col gap-4">
+          {toppingUpKey && (
+            <div className="bg-surface-2 border border-border-subtle rounded-lg p-4">
+              <p className="text-sm font-medium text-text-main">{toppingUpKey.name}</p>
+              <p className="text-xs text-text-muted mt-1">{formatQuota(toppingUpKey)}</p>
+              <p className="text-xs text-text-muted mt-1">
+                The API key value will stay the same.
+              </p>
+            </div>
+          )}
+          <Select
+            label="Quota Action"
+            value={quotaUpdateMode}
+            onChange={(e) => {
+              setQuotaUpdateMode(e.target.value);
+              setKeyQuotaError("");
+            }}
+            options={API_KEY_QUOTA_MANAGE_OPTIONS}
+          />
+          {quotaUpdateMode === "add" && (
+            <Input
+              label="Additional Requests"
+              type="number"
+              min="1"
+              step="1"
+              value={topUpAmount}
+              onChange={(e) => {
+                setTopUpAmount(e.target.value);
+                setKeyQuotaError("");
+              }}
+              placeholder="50"
+              required
+            />
+          )}
+          {quotaUpdateMode === "set_total" && (
+            <>
+              <Input
+                label="Total Request Limit"
+                type="number"
+                min="1"
+                step="1"
+                value={quotaSetTotal}
+                onChange={(e) => {
+                  setQuotaSetTotal(e.target.value);
+                  setKeyQuotaError("");
+                }}
+                placeholder="50"
+                required
+              />
+              <label className="flex items-center gap-2 text-sm text-text-muted">
+                <input
+                  type="checkbox"
+                  checked={quotaResetUsed}
+                  onChange={(e) => setQuotaResetUsed(e.target.checked)}
+                />
+                Reset used count to 0
+              </label>
+            </>
+          )}
+          {quotaUpdateMode === "unlimited" && (
+            <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+              <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                This removes the request limit. Expiration rules still apply.
+              </p>
+            </div>
+          )}
+          {quotaUpdateMode === "reset_used" && (
+            <div className="bg-surface-2 border border-border-subtle rounded-lg p-3">
+              <p className="text-sm text-text-muted">
+                Request usage will be reset to 0. The current quota mode stays the same.
+              </p>
+            </div>
+          )}
+          {keyQuotaError && (
+            <p className="text-sm text-red-500 flex items-center gap-1">
+              <span className="material-symbols-outlined text-[16px]">error</span>
+              {keyQuotaError}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <Button
+              onClick={handleTopUpKey}
+              fullWidth
+              disabled={
+                (quotaUpdateMode === "add" && !topUpAmount)
+                || (quotaUpdateMode === "set_total" && !quotaSetTotal)
+              }
+            >
+              Save Quota
+            </Button>
+            <Button onClick={resetTopUpForm} variant="ghost" fullWidth>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Manage Expiration Modal */}
       <Modal
         isOpen={!!renewingKey}
-        title="Renew API Key"
+        title="Manage Expiration"
         onClose={resetRenewKeyForm}
       >
         <div className="flex flex-col gap-4">
@@ -1497,7 +1740,7 @@ export default function APIPageClient({ machineId }) {
             </div>
           )}
           <Select
-            label="Renew Duration"
+            label="Expiration Action"
             value={renewalDuration}
             onChange={(e) => {
               setRenewalDuration(e.target.value);
@@ -1556,7 +1799,7 @@ export default function APIPageClient({ machineId }) {
                 || (renewalDuration === "specific" && !renewalSpecificExpiresAt)
               }
             >
-              Renew
+              Save Expiration
             </Button>
             <Button onClick={resetRenewKeyForm} variant="ghost" fullWidth>
               Cancel

@@ -29,11 +29,13 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
-    const updated = await updateApiKey(id, {
-      isActive: true,
+    const updateData = {
       expiresAt,
       expiredAt: null,
-    });
+    };
+    if (existing.status === "expired") updateData.isActive = true;
+
+    const updated = await updateApiKey(id, updateData);
 
     return NextResponse.json({ key: updated });
   } catch (error) {

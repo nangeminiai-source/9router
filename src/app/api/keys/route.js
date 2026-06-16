@@ -26,6 +26,7 @@ export async function POST(request) {
       customExpiresAt = null,
       customDurationValue = null,
       customDurationUnit = "days",
+      requestLimit = null,
     } = body;
 
     if (!name) {
@@ -33,6 +34,7 @@ export async function POST(request) {
     }
 
     let expiresAt = null;
+    let normalizedRequestLimit = null;
     try {
       expiresAt = resolveApiKeyExpiresAt({
         expirationPreset,
@@ -40,13 +42,19 @@ export async function POST(request) {
         customDurationValue,
         customDurationUnit,
       });
+      if (requestLimit !== null && requestLimit !== undefined && requestLimit !== "") {
+        normalizedRequestLimit = Number(requestLimit);
+        if (!Number.isInteger(normalizedRequestLimit) || normalizedRequestLimit <= 0) {
+          throw new Error("Request limit must be a positive integer");
+        }
+      }
     } catch (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
     // Always get machineId from server
     const machineId = await getConsistentMachineId();
-    const apiKey = await createApiKey(name, machineId, { expiresAt });
+    const apiKey = await createApiKey(name, machineId, { expiresAt, requestLimit: normalizedRequestLimit });
 
     return NextResponse.json({
       key: apiKey.key,
@@ -55,6 +63,9 @@ export async function POST(request) {
       machineId: apiKey.machineId,
       expiresAt: apiKey.expiresAt,
       expiredAt: apiKey.expiredAt,
+      requestLimit: apiKey.requestLimit,
+      requestUsed: apiKey.requestUsed,
+      requestRemaining: apiKey.requestRemaining,
       status: apiKey.status,
     }, { status: 201 });
   } catch (error) {
