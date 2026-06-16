@@ -29,7 +29,19 @@ const API_KEY_EXPIRATION_OPTIONS = [
   { value: "1d", label: "1 Hari" },
   { value: "7d", label: "7 Hari" },
   { value: "30d", label: "30 Hari" },
-  { value: "custom", label: "Custom Expiration" },
+  { value: "custom_duration", label: "Custom Duration" },
+  { value: "custom", label: "Specific Date & Time" },
+];
+const API_KEY_RENEWAL_OPTIONS = [
+  { value: "1d", label: "1 Hari" },
+  { value: "7d", label: "7 Hari" },
+  { value: "30d", label: "30 Hari" },
+  { value: "custom", label: "Custom Duration" },
+  { value: "specific", label: "Specific Date & Time" },
+];
+const API_KEY_RENEWAL_UNITS = [
+  { value: "days", label: "Hari" },
+  { value: "hours", label: "Jam" },
 ];
 
 // Browser-side health probe: must reach origin (not just CF/TS edge).
@@ -75,7 +87,15 @@ export default function APIPageClient({ machineId }) {
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyExpiration, setNewKeyExpiration] = useState("never");
   const [newKeyCustomExpiresAt, setNewKeyCustomExpiresAt] = useState("");
+  const [newKeyCustomDurationValue, setNewKeyCustomDurationValue] = useState("");
+  const [newKeyCustomDurationUnit, setNewKeyCustomDurationUnit] = useState("days");
   const [keyCreateError, setKeyCreateError] = useState("");
+  const [renewingKey, setRenewingKey] = useState(null);
+  const [renewalDuration, setRenewalDuration] = useState("7d");
+  const [customRenewalValue, setCustomRenewalValue] = useState("");
+  const [customRenewalUnit, setCustomRenewalUnit] = useState("days");
+  const [renewalSpecificExpiresAt, setRenewalSpecificExpiresAt] = useState("");
+  const [keyRenewError, setKeyRenewError] = useState("");
   const [createdKey, setCreatedKey] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
 
@@ -727,13 +747,28 @@ export default function APIPageClient({ machineId }) {
     setNewKeyName("");
     setNewKeyExpiration("never");
     setNewKeyCustomExpiresAt("");
+    setNewKeyCustomDurationValue("");
+    setNewKeyCustomDurationUnit("days");
     setKeyCreateError("");
+  };
+
+  const resetRenewKeyForm = () => {
+    setRenewingKey(null);
+    setRenewalDuration("7d");
+    setCustomRenewalValue("");
+    setCustomRenewalUnit("days");
+    setRenewalSpecificExpiresAt("");
+    setKeyRenewError("");
   };
 
   const handleCreateKey = async () => {
     if (!newKeyName.trim()) return;
     if (newKeyExpiration === "custom" && !newKeyCustomExpiresAt) {
       setKeyCreateError("Custom expiration is required");
+      return;
+    }
+    if (newKeyExpiration === "custom_duration" && !newKeyCustomDurationValue) {
+      setKeyCreateError("Custom duration is required");
       return;
     }
     setKeyCreateError("");
@@ -746,6 +781,8 @@ export default function APIPageClient({ machineId }) {
           name: newKeyName,
           expirationPreset: newKeyExpiration,
           customExpiresAt: newKeyExpiration === "custom" ? newKeyCustomExpiresAt : null,
+          customDurationValue: newKeyExpiration === "custom_duration" ? newKeyCustomDurationValue : null,
+          customDurationUnit: newKeyExpiration === "custom_duration" ? newKeyCustomDurationUnit : "days",
         }),
       });
       const data = await res.json();
@@ -761,6 +798,43 @@ export default function APIPageClient({ machineId }) {
     } catch (error) {
       console.log("Error creating key:", error);
       setKeyCreateError(error.message || "Failed to create API key");
+    }
+  };
+
+  const handleRenewKey = async () => {
+    if (!renewingKey) return;
+    if (renewalDuration === "custom" && !customRenewalValue) {
+      setKeyRenewError("Custom duration is required");
+      return;
+    }
+    if (renewalDuration === "specific" && !renewalSpecificExpiresAt) {
+      setKeyRenewError("Specific expiration date is required");
+      return;
+    }
+
+    setKeyRenewError("");
+    try {
+      const res = await fetch(`/api/keys/${renewingKey.id}/renew`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          renewalPreset: renewalDuration,
+          customDurationValue: renewalDuration === "custom" ? customRenewalValue : null,
+          customDurationUnit: renewalDuration === "custom" ? customRenewalUnit : "days",
+          customExpiresAt: renewalDuration === "specific" ? renewalSpecificExpiresAt : null,
+        }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        setKeys(prev => prev.map(k => k.id === data.key.id ? data.key : k));
+        resetRenewKeyForm();
+      } else {
+        setKeyRenewError(data.error || "Failed to renew API key");
+      }
+    } catch (error) {
+      console.log("Error renewing key:", error);
+      setKeyRenewError(error.message || "Failed to renew API key");
     }
   };
 
@@ -1267,6 +1341,18 @@ export default function APIPageClient({ machineId }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {key.expiresAt && (
+                    <button
+                      onClick={() => {
+                        setRenewingKey(key);
+                        setKeyRenewError("");
+                      }}
+                      className="p-2 hover:bg-primary/10 rounded text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                      title="Renew key"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">event_repeat</span>
+                    </button>
+                  )}
                   <Toggle
                     size="sm"
                     checked={!keyExpired && (key.isActive ?? true)}
@@ -1326,9 +1412,32 @@ export default function APIPageClient({ machineId }) {
             }}
             options={API_KEY_EXPIRATION_OPTIONS}
           />
+          {newKeyExpiration === "custom_duration" && (
+            <div className="grid grid-cols-[minmax(0,1fr)_120px] gap-2">
+              <Input
+                label="Duration"
+                type="number"
+                min="1"
+                step="1"
+                value={newKeyCustomDurationValue}
+                onChange={(e) => {
+                  setNewKeyCustomDurationValue(e.target.value);
+                  setKeyCreateError("");
+                }}
+                placeholder="6"
+                required
+              />
+              <Select
+                label="Unit"
+                value={newKeyCustomDurationUnit}
+                onChange={(e) => setNewKeyCustomDurationUnit(e.target.value)}
+                options={API_KEY_RENEWAL_UNITS}
+              />
+            </div>
+          )}
           {newKeyExpiration === "custom" && (
             <Input
-              label="Custom Expiration"
+              label="Specific Date & Time"
               type="datetime-local"
               value={newKeyCustomExpiresAt}
               onChange={(e) => {
@@ -1346,7 +1455,15 @@ export default function APIPageClient({ machineId }) {
             </p>
           )}
           <div className="flex gap-2">
-            <Button onClick={handleCreateKey} fullWidth disabled={!newKeyName.trim() || (newKeyExpiration === "custom" && !newKeyCustomExpiresAt)}>
+            <Button
+              onClick={handleCreateKey}
+              fullWidth
+              disabled={
+                !newKeyName.trim()
+                || (newKeyExpiration === "custom" && !newKeyCustomExpiresAt)
+                || (newKeyExpiration === "custom_duration" && !newKeyCustomDurationValue)
+              }
+            >
               Create
             </Button>
             <Button
@@ -1357,6 +1474,91 @@ export default function APIPageClient({ machineId }) {
               variant="ghost"
               fullWidth
             >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Renew Key Modal */}
+      <Modal
+        isOpen={!!renewingKey}
+        title="Renew API Key"
+        onClose={resetRenewKeyForm}
+      >
+        <div className="flex flex-col gap-4">
+          {renewingKey && (
+            <div className="bg-surface-2 border border-border-subtle rounded-lg p-4">
+              <p className="text-sm font-medium text-text-main">{renewingKey.name}</p>
+              <p className="text-xs text-text-muted mt-1">{formatExpiration(renewingKey)}</p>
+              <p className="text-xs text-text-muted mt-1">
+                The API key value will stay the same.
+              </p>
+            </div>
+          )}
+          <Select
+            label="Renew Duration"
+            value={renewalDuration}
+            onChange={(e) => {
+              setRenewalDuration(e.target.value);
+              setKeyRenewError("");
+            }}
+            options={API_KEY_RENEWAL_OPTIONS}
+          />
+          {renewalDuration === "custom" && (
+            <div className="grid grid-cols-[minmax(0,1fr)_120px] gap-2">
+              <Input
+                label="Duration"
+                type="number"
+                min="1"
+                step="1"
+                value={customRenewalValue}
+                onChange={(e) => {
+                  setCustomRenewalValue(e.target.value);
+                  setKeyRenewError("");
+                }}
+                placeholder="14"
+                required
+              />
+              <Select
+                label="Unit"
+                value={customRenewalUnit}
+                onChange={(e) => setCustomRenewalUnit(e.target.value)}
+                options={API_KEY_RENEWAL_UNITS}
+              />
+            </div>
+          )}
+          {renewalDuration === "specific" && (
+            <Input
+              label="Specific Date & Time"
+              type="datetime-local"
+              value={renewalSpecificExpiresAt}
+              onChange={(e) => {
+                setRenewalSpecificExpiresAt(e.target.value);
+                setKeyRenewError("");
+              }}
+              min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
+              required
+            />
+          )}
+          {keyRenewError && (
+            <p className="text-sm text-red-500 flex items-center gap-1">
+              <span className="material-symbols-outlined text-[16px]">error</span>
+              {keyRenewError}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <Button
+              onClick={handleRenewKey}
+              fullWidth
+              disabled={
+                (renewalDuration === "custom" && !customRenewalValue)
+                || (renewalDuration === "specific" && !renewalSpecificExpiresAt)
+              }
+            >
+              Renew
+            </Button>
+            <Button onClick={resetRenewKeyForm} variant="ghost" fullWidth>
               Cancel
             </Button>
           </div>

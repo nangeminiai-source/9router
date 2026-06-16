@@ -20,7 +20,13 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { name, expirationPreset = "never", customExpiresAt = null } = body;
+    const {
+      name,
+      expirationPreset = "never",
+      customExpiresAt = null,
+      customDurationValue = null,
+      customDurationUnit = "days",
+    } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
@@ -28,7 +34,12 @@ export async function POST(request) {
 
     let expiresAt = null;
     try {
-      expiresAt = resolveApiKeyExpiresAt({ expirationPreset, customExpiresAt });
+      expiresAt = resolveApiKeyExpiresAt({
+        expirationPreset,
+        customExpiresAt,
+        customDurationValue,
+        customDurationUnit,
+      });
     } catch (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }

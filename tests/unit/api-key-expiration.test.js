@@ -46,6 +46,33 @@ describe("API key expiration", () => {
     }, now)).toThrow(/future/i);
   });
 
+  it("supports custom duration when creating API keys", async () => {
+    const { resolveApiKeyExpiresAt } = await import("@/shared/utils/apiKeyExpiration.js");
+    const now = new Date("2026-06-15T17:00:00.000Z");
+
+    expect(resolveApiKeyExpiresAt({
+      expirationPreset: "custom_duration",
+      customDurationValue: 6,
+      customDurationUnit: "days",
+    }, now)).toBe("2026-06-21T17:00:00.000Z");
+
+    expect(resolveApiKeyExpiresAt({
+      expirationPreset: "custom_duration",
+      customDurationValue: 12,
+      customDurationUnit: "hours",
+    }, now)).toBe("2026-06-16T05:00:00.000Z");
+  });
+
+  it("rejects invalid custom duration when creating API keys", async () => {
+    const { resolveApiKeyExpiresAt } = await import("@/shared/utils/apiKeyExpiration.js");
+
+    expect(() => resolveApiKeyExpiresAt({
+      expirationPreset: "custom_duration",
+      customDurationValue: 0,
+      customDurationUnit: "days",
+    })).toThrow(/greater than 0/i);
+  });
+
   it("validates active non-expired keys", async () => {
     const { createApiKey, validateApiKeyDetailed } = await import("@/lib/db/index.js");
     const key = await createApiKey("temporary", "machine-test", {
@@ -90,5 +117,64 @@ describe("API key expiration", () => {
     expect(validation.valid).toBe(false);
     expect(validation.reason).toBe("expired");
     expect(validation.message).toBe("API key has expired");
+  });
+
+  it("renews active keys from their current expiration time", async () => {
+    const { resolveApiKeyRenewedExpiresAt } = await import("@/shared/utils/apiKeyExpiration.js");
+    const now = new Date("2026-06-15T17:00:00.000Z");
+
+    expect(resolveApiKeyRenewedExpiresAt(
+      { renewalPreset: "7d" },
+      "2026-06-16T17:00:00.000Z",
+      now
+    )).toBe("2026-06-23T17:00:00.000Z");
+  });
+
+  it("renews expired keys from now", async () => {
+    const { resolveApiKeyRenewedExpiresAt } = await import("@/shared/utils/apiKeyExpiration.js");
+    const now = new Date("2026-06-15T17:00:00.000Z");
+
+    expect(resolveApiKeyRenewedExpiresAt(
+      { renewalPreset: "1d" },
+      "2026-06-14T17:00:00.000Z",
+      now
+    )).toBe("2026-06-16T17:00:00.000Z");
+  });
+
+  it("renews keys to a specific future date and time", async () => {
+    const { resolveApiKeyRenewedExpiresAt } = await import("@/shared/utils/apiKeyExpiration.js");
+    const now = new Date("2026-06-15T17:00:00.000Z");
+
+    expect(resolveApiKeyRenewedExpiresAt({
+      renewalPreset: "specific",
+      customExpiresAt: "2026-06-30T23:59:00.000Z",
+    }, "2026-06-16T17:00:00.000Z", now)).toBe("2026-06-30T23:59:00.000Z");
+
+    expect(() => resolveApiKeyRenewedExpiresAt({
+      renewalPreset: "specific",
+      customExpiresAt: "2026-06-15T16:59:00.000Z",
+    }, null, now)).toThrow(/future/i);
+  });
+
+  it("renews an expired key without changing the key value", async () => {
+    const { createApiKey, getApiKeys, updateApiKey } = await import("@/lib/db/index.js");
+    const { resolveApiKeyRenewedExpiresAt } = await import("@/shared/utils/apiKeyExpiration.js");
+    const key = await createApiKey("renew-me", "machine-test", {
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    await getApiKeys();
+
+    const renewedExpiresAt = resolveApiKeyRenewedExpiresAt({ renewalPreset: "1d" }, key.expiresAt);
+    const renewed = await updateApiKey(key.id, {
+      isActive: true,
+      expiresAt: renewedExpiresAt,
+      expiredAt: null,
+    });
+
+    expect(renewed.key).toBe(key.key);
+    expect(renewed.isActive).toBe(true);
+    expect(renewed.status).toBe("active");
+    expect(renewed.expiredAt).toBeNull();
+    expect(new Date(renewed.expiresAt).getTime()).toBeGreaterThan(Date.now());
   });
 });
